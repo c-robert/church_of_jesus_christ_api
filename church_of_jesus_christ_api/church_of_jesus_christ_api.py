@@ -39,6 +39,8 @@ _endpoints = {
     + "/services/orgs/assigned-missionaries?unitNumber={unit}",
     "attendance": _host("lcr")
     + "/services/umlu/v1/class-and-quorum/attendance/overview/unitNumber/{unit}",
+    "attendance-update": _host("membertools-api")
+    + "/api/v4/reports/class-quorum-attendance",
     "authn": _host("id") + "/api/v1/authn",
     "birthdays": _host("lcr")
     + "/services/report/birthday-list/unit/{unit}?month=1&months=12",
@@ -202,6 +204,10 @@ class ChurchOfJesusChristAPI(object):
             endpoint = endpoint.replace(
                 "{org_id}", default_if_none(org_id, self.__org_id)
             )
+        if self.__access_token:
+            endpoint = endpoint.replace(
+                "{token}", self.__access_token
+            )
         return endpoint
 
     def __get_JSON(self, endpoint: str) -> JSONType:
@@ -209,6 +215,17 @@ class ChurchOfJesusChristAPI(object):
             endpoint,
             headers={"Accept": "application/json",
                      "Authorization":f"Bearer {self.__access_token}"},
+            timeout=15
+        )
+        assert resp.ok, resp.content
+        return resp.json()
+    
+    def __post_JSON(self, endpoint: str, data: str) -> JSONType:
+        resp = self.__session.post(
+            endpoint,
+            headers={"Content-Type": "application/json;charset=UTF-8",
+                     "Authorization":f"Bearer {self.__access_token}"},
+            data=data,
             timeout=15
         )
         assert resp.ok, resp.content
@@ -305,6 +322,54 @@ class ChurchOfJesusChristAPI(object):
             self.__endpoint("attendance", unit=unit)
             + f"/start/{start_date}/end/{end_date}"
         )
+
+    MemberList = list[str]
+    def update_attendance(
+        self,
+        uuid: str | MemberList,
+        attended_date: datetime.date,
+        attended: bool = True,
+        unit: int | None = None
+    ) -> JSONType:
+        """
+        Updates the attendance value for all the uuid's provided on the specified date.
+
+        Parameters
+
+        uuid: str | MemberList
+            Either a single string with the member's UUID or a list of member UUID strings.
+        attended_date: datetime.date
+            The date to mark in the attendance report.
+        attended: bool
+            The attendance type, either attended (True) or unattended (False)
+        unit: int
+            The unit of the member list to update attendance
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/update_attendance-schema.md
+        """
+        attended_str = "attended" if attended else "unattended"
+        attended_list = [uuid] if isinstance(uuid, str) else uuid
+        if unit is None:
+            unit = self.__user_details["homeUnits"][0]
+        update_resp = self.__post_JSON(
+            _endpoints["attendance-update"],
+            data=json.dumps([
+                {
+                    "unitNumber": unit,
+                    "weeks": [
+                        {
+                            attended_str: attended_list,
+                            "week": self.convert_date_to_string_using_default_date_if_none(
+                                        attended_date, datetime.date.today())
+                        }
+                    ]
+                }
+            ])
+        )
+
+        return update_resp
 
     def get_birthdays(self, unit: int = None) -> JSONType:
         """
