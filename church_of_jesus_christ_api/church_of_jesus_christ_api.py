@@ -246,7 +246,8 @@ class ChurchOfJesusChristAPI(BaseChurchOfJesusChristAPI):
             endpoint,
             headers={"Accept": "application/json",
                      "Authorization":f"Bearer {self._access_token}"},
-            timeout=15
+            timeout=15,
+            follow_redirects=True
         )
         assert resp.status_code == httpx.codes.OK, resp.content
         return resp.json()
@@ -257,7 +258,8 @@ class ChurchOfJesusChristAPI(BaseChurchOfJesusChristAPI):
             headers={"Content-Type": "application/json;charset=UTF-8",
                      "Authorization":f"Bearer {self._access_token}"},
             data=data,
-            timeout=15
+            timeout=15,
+            follow_redirects=True
         )
         assert resp.status_code == httpx.codes.OK, resp.content
         return resp.json()
