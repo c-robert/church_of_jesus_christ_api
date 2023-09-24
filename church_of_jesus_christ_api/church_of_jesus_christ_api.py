@@ -14,7 +14,7 @@ typing.get_type_hints = lambda obj, *unused: obj
 
 import datetime
 import json
-import requests
+import httpx
 from typing import List, Dict, Any, Union
 
 JSONType = Union[Dict[str, Any], List[Any]]
@@ -96,83 +96,43 @@ _endpoints = {
     "user": _host("membertools-api") + "/api/v4/user",
 }
 
-
-class ChurchOfJesusChristAPI(object):
+class BaseChurchOfJesusChristAPI(object):
     """
-    A class used to interact with features found on churchofjesuschrist.org, such
-    as getting member data, calling information, reports, etc.
+    Base class containing common code for both the Synchronous and Asynchronous clients.
     """
 
-    def __init__(self, username: str, password: str, proxies: dict[str, str] = None, verify_SSL: bool = None) -> None:
+    def __init__(self, client) -> None:
+        self._client = client        # Derived class chooses either Sync or Async client
+        self._user_details = None
+        self._org_id = None
+        self._access_token = None
+
+    @property
+    def client(self):
         """
-        Parameters:
-        username : str
-            username for the Church's website
-        password : str
-            password for the Church's website
-        debug_mode : bool
-            Disables SSL verification. Useful for debugging HTTPS with a proxy
+        Returns the HTTPX Client being used by the API.
         """
+        return self._client
+    
+    @property
+    def user_details(self):
+        """
+        Returns the details of the user logged into this session
 
-        self.__session = requests.Session()
-        if proxies is not None:
-            self.__session.proxies.update(proxies)
-        self.__session.verify = verify_SSL if verify_SSL is not None else proxies is None
-        self.__user_details = None
-        self.__org_id = None
+        Returns
 
-        login_resp = self.__session.post(
-            _endpoints["authn"],
-            timeout=15,
-            headers={"Content-Type": "application/json;charset=UTF-8"},
-            data=json.dumps({"username":username, "password": password})
-        ).json()
+        .. literalinclude:: ../JSON_schemas/user_details-schema.md
+        """
+        return self._user_details
 
-        # Slighly obfuscated, by no means hidden
-        client_id = codecs.decode("0bnyu46hlyC0T9DL1357", "rot13")
-        client_secret = codecs.decode("9n4ShhBgxm17hz4B8HVT3rSV4hJvnzXH1bjHkMPR", "rot13")
+    @property
+    def org_id(self):
+        return self._org_id
 
-        resp = self.__session.get(
-            _endpoints["oauth2-authorize"],
-            timeout=15,
-            params={"client_id":client_id,
-                    "response_type":"code",
-                    "scope":"openid profile offline_access cmisid",
-                    "redirect_uri": "https://mobileandroid",
-                    "state":str(uuid.uuid4()),
-                    "sessionToken":login_resp["sessionToken"],
-            },
-            allow_redirects=False
-        )
+    def convert_date_to_string_using_default_date_if_none(self, val, default):
+        return (val if val != None else default).strftime("%Y-%m-%d")
 
-        code = parse_qs(urlparse(resp.headers["location"]).query)["code"][0]
-
-        token_json = self.__session.post(
-            _endpoints["oauth2-token"],
-            timeout=15,
-            headers={"Content-Type":"application/x-www-form-urlencoded"},
-            params={"code":code,
-                    "client_id":client_id,
-                    "client_secret":client_secret,
-                    "grant_type": "authorization_code",
-                    "redirect_uri": "https://mobileandroid",
-            }
-        ).json()
-
-        self.__access_token = token_json["access_token"]
-
-        # Some endpoints require this
-        self.__session.cookies.set_cookie(
-            requests.cookies.create_cookie(
-                name="owp", value=token_json["id_token"]
-            ))
-
-        # This is necessary to set appSession cookies for a few endpoints
-        self.__session.get(_endpoints["lcr-login"], timeout=15)
-        
-        self.__user_details = self.__get_JSON(self.__endpoint("user"))
-
-    def __endpoint(
+    def _endpoint(
         self,
         name: str,
         unit: int = None,
@@ -186,75 +146,121 @@ class ChurchOfJesusChristAPI(object):
         def default_if_none(val, default):
             return str(val if val != None else default)
 
-        if self.__user_details:
+        if self._user_details:
             endpoint = endpoint.replace(
-                "{unit}", default_if_none(unit, self.__user_details["homeUnits"][0])
+                "{unit}", default_if_none(unit, self._user_details["homeUnits"][0])
             )
             endpoint = endpoint.replace(
-                "{parent_unit}", default_if_none(parent_unit, self.__user_details["parentUnits"][0])
+                "{parent_unit}", default_if_none(parent_unit, self._user_details["parentUnits"][0])
             )
             endpoint = endpoint.replace(
                 "{member_id}",
-                default_if_none(member_id, self.__user_details["individualId"]),
+                default_if_none(member_id, self._user_details["individualId"]),
             )
             endpoint = endpoint.replace(
-                "{uuid}", default_if_none(uuid, self.__user_details["uuid"])
+                "{uuid}", default_if_none(uuid, self._user_details["uuid"])
             )
-        if self.__org_id:
+        if self._org_id:
             endpoint = endpoint.replace(
-                "{org_id}", default_if_none(org_id, self.__org_id)
+                "{org_id}", default_if_none(org_id, self._org_id)
             )
-        if self.__access_token:
+        if self._access_token:
             endpoint = endpoint.replace(
-                "{token}", self.__access_token
+                "{token}", self._access_token
             )
         return endpoint
 
+class ChurchOfJesusChristAPI(BaseChurchOfJesusChristAPI):
+    """
+    A class used to interact with features found on churchofjesuschrist.org, such
+    as getting member data, calling information, reports, etc.
+    """
+
+    def __init__(self, proxies: dict[str, str] = None, verify_SSL: bool = None) -> None:
+        """
+        Parameters:
+        proxies : dict[str, str]
+        verify_SSL : bool
+        debug_mode : bool
+            Disables SSL verification. Useful for debugging HTTPS with a proxy
+        """
+
+        BaseChurchOfJesusChristAPI.__init__(
+            self,
+            httpx.Client(verify=verify_SSL if verify_SSL is not None else proxies is None, 
+                         proxies=proxies))
+        
+    def login(self, username, password) -> None:
+        login_resp = self._client.post(
+            _endpoints["authn"],
+            timeout=15,
+            headers={"Content-Type": "application/json;charset=UTF-8"},
+            data=json.dumps({"username":username, "password": password})
+        ).json()
+
+        # Slightly obfuscated, by no means hidden
+        client_id = codecs.decode("0bnyu46hlyC0T9DL1357", "rot13")
+        client_secret = codecs.decode("9n4ShhBgxm17hz4B8HVT3rSV4hJvnzXH1bjHkMPR", "rot13")
+
+        resp = self._client.get(
+            _endpoints["oauth2-authorize"],
+            timeout=15,
+            params={"client_id":client_id,
+                    "response_type":"code",
+                    "scope":"openid profile offline_access cmisid",
+                    "redirect_uri": "https://mobileandroid",
+                    "state":str(uuid.uuid4()),
+                    "sessionToken":login_resp["sessionToken"],
+            },
+            follow_redirects=False
+        )
+
+        code = parse_qs(urlparse(resp.headers["location"]).query)["code"][0]
+
+        token_json = self._client.post(
+            _endpoints["oauth2-token"],
+            timeout=15,
+            headers={"Content-Type":"application/x-www-form-urlencoded"},
+            params={"code":code,
+                    "client_id":client_id,
+                    "client_secret":client_secret,
+                    "grant_type": "authorization_code",
+                    "redirect_uri": "https://mobileandroid",
+            }
+        ).json()
+
+        self._access_token = token_json["access_token"]
+
+        # Some endpoints require this
+        self._client.cookies.set(
+                name="owp", value=token_json["id_token"]
+            )
+
+        # This is necessary to set appSession cookies for a few endpoints
+        self._client.get(_endpoints["lcr-login"], timeout=15)
+        
+        self._user_details = self.__get_JSON(self._endpoint("user"))
+
     def __get_JSON(self, endpoint: str) -> JSONType:
-        resp = self.__session.get(
+        resp = self._client.get(
             endpoint,
             headers={"Accept": "application/json",
-                     "Authorization":f"Bearer {self.__access_token}"},
+                     "Authorization":f"Bearer {self._access_token}"},
             timeout=15
         )
-        assert resp.ok, resp.content
+        assert resp.status_code == httpx.codes.OK, resp.content
         return resp.json()
     
     def __post_JSON(self, endpoint: str, data: str) -> JSONType:
-        resp = self.__session.post(
+        resp = self._client.post(
             endpoint,
             headers={"Content-Type": "application/json;charset=UTF-8",
-                     "Authorization":f"Bearer {self.__access_token}"},
+                     "Authorization":f"Bearer {self._access_token}"},
             data=data,
             timeout=15
         )
-        assert resp.ok, resp.content
+        assert resp.status_code == httpx.codes.OK, resp.content
         return resp.json()
-
-    @property
-    def session(self):
-        """
-        Returns the requests session being used by the API.
-        """
-        return self.__session
-
-    @property
-    def user_details(self):
-        """
-        Returns the details of the user logged into this session
-
-        Returns
-
-        .. literalinclude:: ../JSON_schemas/user_details-schema.md
-        """
-        return self.__user_details
-
-    @property
-    def org_id(self):
-        return self.__org_id
-
-    def convert_date_to_string_using_default_date_if_none(self, val, default):
-        return (val if val != None else default).strftime("%Y-%m-%d")
 
     def get_action_and_interviews(self, unit: int = None) -> JSONType:
         """
@@ -270,7 +276,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_action_and_interviews-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("action-and-interviews", unit=unit))
+        return self.__get_JSON(self._endpoint("action-and-interviews", unit=unit))
 
     def get_attendance(self, unit: int = None) -> JSONType:
         """
@@ -286,7 +292,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_attendance-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("attendance", unit=unit))
+        return self.__get_JSON(self._endpoint("attendance", unit=unit))
 
     def get_attendance_date_range(
         self,
@@ -319,7 +325,7 @@ class ChurchOfJesusChristAPI(object):
         )
 
         return self.__get_JSON(
-            self.__endpoint("attendance", unit=unit)
+            self._endpoint("attendance", unit=unit)
             + f"/start/{start_date}/end/{end_date}"
         )
 
@@ -352,7 +358,7 @@ class ChurchOfJesusChristAPI(object):
         attended_str = "attended" if attended else "unattended"
         attended_list = [uuid] if isinstance(uuid, str) else uuid
         if unit is None:
-            unit = self.__user_details["homeUnits"][0]
+            unit = self._user_details["homeUnits"][0]
         update_resp = self.__post_JSON(
             _endpoints["attendance-update"],
             data=json.dumps([
@@ -385,7 +391,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_birthdays-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("birthdays", unit=unit))
+        return self.__get_JSON(self._endpoint("birthdays", unit=unit))
     
     def get_mobile_sync_data(self, unit: int = None) -> JSONType:
         """
@@ -402,7 +408,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_mobile_sync_data-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("mobile-sync", unit=unit))
+        return self.__get_JSON(self._endpoint("mobile-sync", unit=unit))
 
     def get_directory(self, unit: int = None) -> JSONType:
         """
@@ -418,7 +424,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_directory-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("households", unit=unit))
+        return self.__get_JSON(self._endpoint("households", unit=unit))
     
     def get_units(self, parent_unit: int = None) -> JSONType:
         """
@@ -434,7 +440,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_units-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("units", parent_unit=parent_unit))
+        return self.__get_JSON(self._endpoint("units", parent_unit=parent_unit))
 
     def get_family_history_report(self, unit: int = None) -> JSONType:
         """
@@ -450,7 +456,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_family_history_report-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("family-history", unit=unit))
+        return self.__get_JSON(self._endpoint("family-history", unit=unit))
 
     def get_key_indicators(self, unit: int = None) -> JSONType:
         """
@@ -466,7 +472,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_key_indicators-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("key-indicators", unit=unit))
+        return self.__get_JSON(self._endpoint("key-indicators", unit=unit))
 
     def get_member_callings_and_classes(self, member_id: int = None) -> JSONType:
         """
@@ -483,7 +489,7 @@ class ChurchOfJesusChristAPI(object):
         """
 
         return self.__get_JSON(
-            self.__endpoint("member-callings-classes", member_id=member_id)
+            self._endpoint("member-callings-classes", member_id=member_id)
         )
 
     def get_member_list(self, unit: int = None) -> JSONType:
@@ -500,7 +506,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_member_list-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("member-list", unit=unit))
+        return self.__get_JSON(self._endpoint("member-list", unit=unit))
 
     def get_member_service(self, member_id: int = None) -> JSONType:
         """
@@ -516,7 +522,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_member_service-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("member-service", member_id=member_id))
+        return self.__get_JSON(self._endpoint("member-service", member_id=member_id))
 
     def get_members_with_callings(self, unit: int = None) -> JSONType:
         """
@@ -532,7 +538,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_members_with_callings-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("members-with-callings", unit=unit))
+        return self.__get_JSON(self._endpoint("members-with-callings", unit=unit))
 
     def get_members_without_callings(self, unit: int = None) -> JSONType:
         """
@@ -548,7 +554,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_members_without_callings-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("members-without-callings", unit=unit))
+        return self.__get_JSON(self._endpoint("members-without-callings", unit=unit))
 
     def get_ministering(self, unit: int = None) -> JSONType:
         """
@@ -564,7 +570,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_ministering-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("ministering", unit=unit))
+        return self.__get_JSON(self._endpoint("ministering", unit=unit))
 
     def get_ministering_full(self, unit: int = None) -> JSONType:
         """
@@ -580,7 +586,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_ministering_full-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("ministering-full", unit=unit))
+        return self.__get_JSON(self._endpoint("ministering-full", unit=unit))
 
     def get_missionary_indicators(self, unit: int = None) -> JSONType:
         """
@@ -596,7 +602,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_missionary_indicators-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("missionary-indicators", unit=unit))
+        return self.__get_JSON(self._endpoint("missionary-indicators", unit=unit))
 
     def get_missionary_progress_record(self, unit: int = None) -> JSONType:
         """
@@ -612,7 +618,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_missionary_progress_record-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("missionary-progress-record", unit=unit))
+        return self.__get_JSON(self._endpoint("missionary-progress-record", unit=unit))
 
     def get_moved_in(self, unit: int = None) -> JSONType:
         """
@@ -628,7 +634,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_moved_in-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("moved-in", unit=unit))
+        return self.__get_JSON(self._endpoint("moved-in", unit=unit))
 
     def get_moved_out(self, unit: int = None) -> JSONType:
         """
@@ -644,7 +650,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_moved_out-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("moved-out", unit=unit))
+        return self.__get_JSON(self._endpoint("moved-out", unit=unit))
 
     def get_new_members(self, unit: int = None) -> JSONType:
         """
@@ -660,7 +666,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_new_members-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("new-member", unit=unit))
+        return self.__get_JSON(self._endpoint("new-member", unit=unit))
 
     def get_out_of_unit_callings(self, unit: int = None) -> JSONType:
         """
@@ -676,7 +682,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_out_of_unit_callings-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("out-of-unit-callings", unit=unit))
+        return self.__get_JSON(self._endpoint("out-of-unit-callings", unit=unit))
 
     def get_quarterly_reports(self, unit: int = None) -> JSONType:
         """
@@ -696,13 +702,13 @@ class ChurchOfJesusChristAPI(object):
             return [
                 quarter.split("-")
                 for quarter in self.__get_JSON(
-                    self.__endpoint("quarterly-report-quarters", unit=unit)
+                    self._endpoint("quarterly-report-quarters", unit=unit)
                 )
             ]
 
         def get_report(year, quarter):
             return self.__get_JSON(
-                self.__endpoint("quarterly-report", unit=unit)
+                self._endpoint("quarterly-report", unit=unit)
                 + f"&year={year}&quarter={quarter}"
             )
 
@@ -731,13 +737,13 @@ class ChurchOfJesusChristAPI(object):
             return [
                 quarter.split("-")
                 for quarter in self.__get_JSON(
-                    self.__endpoint("seminary-quarters", unit=unit)
+                    self._endpoint("seminary-quarters", unit=unit)
                 )
             ]
 
         def get_report(year, quarter):
             return self.__get_JSON(
-                self.__endpoint("seminary-report", unit=unit)
+                self._endpoint("seminary-report", unit=unit)
                 + f"&year={year}&quarter={quarter}"
             )
 
@@ -760,7 +766,7 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_unit_organizations-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("unit-organizations", unit=unit))
+        return self.__get_JSON(self._endpoint("unit-organizations", unit=unit))
 
     def get_suborganization(self, org_id: int = None, unit: int = None) -> JSONType:
         """
@@ -777,16 +783,16 @@ class ChurchOfJesusChristAPI(object):
 
         .. literalinclude:: ../JSON_schemas/get_suborganization-schema.md
         """
-        if org_id is None and self.__org_id is None:
+        if org_id is None and self._org_id is None:
             # Set SUNDAY_GENDER class org id
-            self.__org_id = next(
+            self._org_id = next(
                 assignment
                 for assignment in self.get_member_callings_and_classes()["classAssignments"]
                 if assignment["group"] == "SUNDAY_GENDER"
             )["classId"]
 
         return self.__get_JSON(
-            self.__endpoint("suborganization", org_id=org_id, unit=unit)
+            self._endpoint("suborganization", org_id=org_id, unit=unit)
         )[0]
 
     def get_full_time_missionaries(self, unit: int = None) -> JSONType:
@@ -801,7 +807,7 @@ class ChurchOfJesusChristAPI(object):
 
         .. literalinclude:: ../JSON_schemas/get_full_time_missionaries-schema.md
         """
-        return self.__get_JSON(self.__endpoint("full-time-missionaries", unit=unit))
+        return self.__get_JSON(self._endpoint("full-time-missionaries", unit=unit))
 
     def get_assigned_missionaries(self, unit: int = None) -> JSONType:
         """
@@ -815,7 +821,7 @@ class ChurchOfJesusChristAPI(object):
 
         .. literalinclude:: ../JSON_schemas/get_assigned_missionaries-schema.md
         """
-        return self.__get_JSON(self.__endpoint("assigned-missionaries", unit=unit))
+        return self.__get_JSON(self._endpoint("assigned-missionaries", unit=unit))
 
     def get_unit_statistics(self, unit: int = None) -> JSONType:
         """
@@ -831,4 +837,4 @@ class ChurchOfJesusChristAPI(object):
         .. literalinclude:: ../JSON_schemas/get_unit_statistics-schema.md
         """
 
-        return self.__get_JSON(self.__endpoint("statistics", unit=unit))
+        return self.__get_JSON(self._endpoint("statistics", unit=unit))

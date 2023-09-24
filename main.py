@@ -71,7 +71,9 @@ if __name__ == '__main__':
     if len(argv) <= 1:
         print("Usage: attendance.py <input directory>")
     else:
-        api = ChurchOfJesusChristAPI('robertd', 'bianchi2001bike')
+        api = ChurchOfJesusChristAPI()
+
+        api.login('robertd', 'bianchi2001bike')
 
         details = api.user_details
 
