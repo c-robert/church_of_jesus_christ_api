@@ -26,6 +26,6 @@ setup(
     },
     include_package_data=True,
     packages=find_packages(),
-    install_requires=["httpx"],
+    install_requires=["httpx", "trio"],
     extras={"documentation": ["sphinx", "sphinx_rtd_theme"]},
 )

@@ -1,7 +1,8 @@
-from church_of_jesus_christ_api import ChurchOfJesusChristAPI
+from church_of_jesus_christ_api import AsyncChurchOfJesusChristAPI
 from datetime import date
 from sys import argv
 import os
+import trio
 
 import logging
 import contextlib
@@ -67,35 +68,38 @@ def load_attendance(file):
     return list
 
 
+async def main(input_directory):
+    api = AsyncChurchOfJesusChristAPI()
+
+    await api.login('robertd', 'bianchi2001bike')
+
+    details = api.user_details
+
+    unit = int(details["homeUnits"][0])
+
+    members = await api.get_member_list()
+
+    files = os.listdir(input_directory)
+
+    for file in files:
+        if file.endswith('.txt'):
+            # Get the attendance date
+            attend_date = date.fromisoformat(os.path.splitext(file)[0])
+            # Get the people that attended
+            for person in load_attendance(os.path.join(argv[1], file)):
+                member = find_member(members, person[0], person[1])
+
+                if member is not None:
+                    # Mark attended
+                    print(await api.update_attendance(member['uuid'], attend_date, True, unit))
+                else:
+                    print(f"Unable to find: {person[0]}, {person[1]}")
+
 if __name__ == '__main__':
     if len(argv) <= 1:
         print("Usage: attendance.py <input directory>")
     else:
-        api = ChurchOfJesusChristAPI()
-
-        api.login('robertd', 'bianchi2001bike')
-
-        details = api.user_details
-
-        unit = int(details["homeUnits"][0])
-
-        members = api.get_member_list()
-
-        files = os.listdir(argv[1])
-
-        for file in files:
-            if file.endswith('.txt'):
-                # Get the attendance date
-                attend_date = date.fromisoformat(os.path.splitext(file)[0])
-                # Get the people that attended
-                for person in load_attendance(os.path.join(argv[1], file)):
-                    member = find_member(members, person[0], person[1])
-
-                    if member is not None:
-                        # Mark attended
-                        print(api.update_attendance(member['uuid'], attend_date, True, unit))
-                    else:
-                        print(f"Unable to find: {person[0]}, {person[1]}")
+        trio.run(main, argv[1])
 
 
 

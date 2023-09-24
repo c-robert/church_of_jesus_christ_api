@@ -840,3 +840,675 @@ class ChurchOfJesusChristAPI(BaseChurchOfJesusChristAPI):
         """
 
         return self.__get_JSON(self._endpoint("statistics", unit=unit))
+
+
+class AsyncChurchOfJesusChristAPI(BaseChurchOfJesusChristAPI):
+    """
+    A class used to interact with features found on churchofjesuschrist.org, such
+    as getting member data, calling information, reports, etc.
+    """
+
+    def __init__(self, proxies: dict[str, str] = None, verify_SSL: bool = None) -> None:
+        """
+        Parameters:
+        proxies : dict[str, str]
+        verify_SSL : bool
+        debug_mode : bool
+            Disables SSL verification. Useful for debugging HTTPS with a proxy
+        """
+
+        BaseChurchOfJesusChristAPI.__init__(
+            self,
+            httpx.AsyncClient(verify=verify_SSL if verify_SSL is not None else proxies is None, 
+                         proxies=proxies))
+        
+    async def login(self, username, password) -> None:
+        login_resp = (await self._client.post(
+            _endpoints["authn"],
+            timeout=15,
+            headers={"Content-Type": "application/json;charset=UTF-8"},
+            data=json.dumps({"username":username, "password": password})
+        )).json()
+
+        # Slightly obfuscated, by no means hidden
+        client_id = codecs.decode("0bnyu46hlyC0T9DL1357", "rot13")
+        client_secret = codecs.decode("9n4ShhBgxm17hz4B8HVT3rSV4hJvnzXH1bjHkMPR", "rot13")
+
+        resp = await self._client.get(
+            _endpoints["oauth2-authorize"],
+            timeout=15,
+            params={"client_id":client_id,
+                    "response_type":"code",
+                    "scope":"openid profile offline_access cmisid",
+                    "redirect_uri": "https://mobileandroid",
+                    "state":str(uuid.uuid4()),
+                    "sessionToken":login_resp["sessionToken"],
+            },
+            follow_redirects=False
+        )
+
+        code = parse_qs(urlparse(resp.headers["location"]).query)["code"][0]
+
+        token_json = (await self._client.post(
+            _endpoints["oauth2-token"],
+            timeout=15,
+            headers={"Content-Type":"application/x-www-form-urlencoded"},
+            params={"code":code,
+                    "client_id":client_id,
+                    "client_secret":client_secret,
+                    "grant_type": "authorization_code",
+                    "redirect_uri": "https://mobileandroid",
+            }
+        )).json()
+
+        self._access_token = token_json["access_token"]
+
+        # Some endpoints require this
+        self._client.cookies.set(
+                name="owp", value=token_json["id_token"]
+            )
+
+        # This is necessary to set appSession cookies for a few endpoints
+        await self._client.get(_endpoints["lcr-login"], timeout=15)
+        
+        self._user_details = await self.__get_JSON(self._endpoint("user"))
+
+    async def __get_JSON(self, endpoint: str) -> JSONType:
+        resp = await self._client.get(
+            endpoint,
+            headers={"Accept": "application/json",
+                     "Authorization":f"Bearer {self._access_token}"},
+            timeout=15,
+            follow_redirects=True
+        )
+        assert resp.status_code == httpx.codes.OK, resp.content
+        return resp.json()
+    
+    async def __post_JSON(self, endpoint: str, data: str) -> JSONType:
+        resp = await self._client.post(
+            endpoint,
+            headers={"Content-Type": "application/json;charset=UTF-8",
+                     "Authorization":f"Bearer {self._access_token}"},
+            data=data,
+            timeout=15,
+            follow_redirects=True
+        )
+        assert resp.status_code == httpx.codes.OK, resp.content
+        return resp.json()
+
+    async def get_action_and_interviews(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit action and interview list
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_action_and_interviews-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("action-and-interviews", unit=unit))
+
+    async def get_attendance(self, unit: int = None) -> JSONType:
+        """
+        Returns the attendance list for the last 5 weeks
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_attendance-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("attendance", unit=unit))
+
+    async def get_attendance_date_range(
+        self,
+        start_date: datetime.date = None,
+        end_date: datetime.date = None,
+        unit: int = None,
+    ) -> JSONType:
+        """
+        Returns the attendance list for a given date range (default 1 year ago to today)
+
+        Parameters
+
+        start_date: datetime.date
+            The start date after which attendance will be retrieved
+        end_date: datetime.date
+            The end date after which attendance will no longer be retrieved
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_attendance_date_range-schema.md
+        """
+
+        start_date = self.convert_date_to_string_using_default_date_if_none(
+            start_date, datetime.datetime.now() - datetime.timedelta(days=365)
+        )
+        end_date = self.convert_date_to_string_using_default_date_if_none(
+            end_date, datetime.date.today()
+        )
+
+        return await self.__get_JSON(
+            self._endpoint("attendance", unit=unit)
+            + f"/start/{start_date}/end/{end_date}"
+        )
+
+    MemberList = list[str]
+    async def update_attendance(
+        self,
+        uuid: str | MemberList,
+        attended_date: datetime.date,
+        attended: bool = True,
+        unit: int | None = None
+    ) -> JSONType:
+        """
+        Updates the attendance value for all the uuid's provided on the specified date.
+
+        Parameters
+
+        uuid: str | MemberList
+            Either a single string with the member's UUID or a list of member UUID strings.
+        attended_date: datetime.date
+            The date to mark in the attendance report.
+        attended: bool
+            The attendance type, either attended (True) or unattended (False)
+        unit: int
+            The unit of the member list to update attendance
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/update_attendance-schema.md
+        """
+        attended_str = "attended" if attended else "unattended"
+        attended_list = [uuid] if isinstance(uuid, str) else uuid
+        if unit is None:
+            unit = self._user_details["homeUnits"][0]
+        update_resp = await self.__post_JSON(
+            _endpoints["attendance-update"],
+            data=json.dumps([
+                {
+                    "unitNumber": unit,
+                    "weeks": [
+                        {
+                            attended_str: attended_list,
+                            "week": self.convert_date_to_string_using_default_date_if_none(
+                                        attended_date, datetime.date.today())
+                        }
+                    ]
+                }
+            ])
+        )
+
+        return update_resp
+
+    async def get_birthdays(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit birthday list
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_birthdays-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("birthdays", unit=unit))
+    
+    async def get_mobile_sync_data(self, unit: int = None) -> JSONType:
+        """
+        Returns data that can be found in the Member Tools app. This is the endpoint
+        used by the app when an update is requested.
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_mobile_sync_data-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("mobile-sync", unit=unit))
+
+    async def get_directory(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit directory of households
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_directory-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("households", unit=unit))
+    
+    async def get_units(self, parent_unit: int = None) -> JSONType:
+        """
+        Returns a list of child units for the given parent unit
+
+        Parameters
+
+        parent_unit : int
+            Number of the church unit for which to retrieve a list of child units
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_units-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("units", parent_unit=parent_unit))
+
+    async def get_family_history_report(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit family history report
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_family_history_report-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("family-history", unit=unit))
+
+    async def get_key_indicators(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit key indicators
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_key_indicators-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("key-indicators", unit=unit))
+
+    async def get_member_callings_and_classes(self, member_id: int = None) -> JSONType:
+        """
+        Returns the callings and class assignments for the given member
+
+        Parameters
+
+        member_id : int
+            ID of the member for which to retrieve information
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_member_callings_and_classes-schema.md
+        """
+
+        return await self.__get_JSON(
+            self._endpoint("member-callings-classes", member_id=member_id)
+        )
+
+    async def get_member_list(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit member list
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_member_list-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("member-list", unit=unit))
+
+    async def get_member_service(self, member_id: int = None) -> JSONType:
+        """
+        Returns member's service assignments
+
+        Parameters
+
+        member_id : int
+            ID of the member for which to retrieve information
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_member_service-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("member-service", member_id=member_id))
+
+    async def get_members_with_callings(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit list of members with callings
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_members_with_callings-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("members-with-callings", unit=unit))
+
+    async def get_members_without_callings(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit list of members without callings
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_members_without_callings-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("members-without-callings", unit=unit))
+
+    async def get_ministering(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit ministering assignments
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_ministering-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("ministering", unit=unit))
+
+    async def get_ministering_full(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit ministering assignments as well as interview information
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_ministering_full-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("ministering-full", unit=unit))
+
+    async def get_missionary_indicators(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit missionary indicators
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_missionary_indicators-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("missionary-indicators", unit=unit))
+
+    async def get_missionary_progress_record(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit missionary progress record
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_missionary_progress_record-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("missionary-progress-record", unit=unit))
+
+    async def get_moved_in(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit list of recently moved in members
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_moved_in-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("moved-in", unit=unit))
+
+    async def get_moved_out(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit list of recently moved out members
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_moved_out-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("moved-out", unit=unit))
+
+    async def get_new_members(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit list of new members (recent converts)
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_new_members-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("new-member", unit=unit))
+
+    async def get_out_of_unit_callings(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit list of members with callings out of unit
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_out_of_unit_callings-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("out-of-unit-callings", unit=unit))
+
+    async def get_quarterly_reports(self, unit: int = None) -> JSONType:
+        """
+        Returns all available unit quarterly reports
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_quarterly_reports-schema.md
+        """
+
+        async def get_quarters():
+            return [
+                quarter.split("-")
+                for quarter in await self.__get_JSON(
+                    self._endpoint("quarterly-report-quarters", unit=unit)
+                )
+            ]
+
+        async def get_report(year, quarter):
+            return await self.__get_JSON(
+                self._endpoint("quarterly-report", unit=unit)
+                + f"&year={year}&quarter={quarter}"
+            )
+
+        return {
+            year: {quarter: await get_report(year, quarter)}
+            for year, quarter in await get_quarters()
+        }
+
+    async def get_seminary_and_institute_quarterly_attendance(
+        self, unit: int = None
+    ) -> JSONType:
+        """
+        Returns all availabe seminary/institute quarterly attendance reports
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_seminary_and_institute_quarterly_attendance-schema.md
+        """
+
+        async def get_quarters():
+            return [
+                quarter.split("-")
+                for quarter in await self.__get_JSON(
+                    self._endpoint("seminary-quarters", unit=unit)
+                )
+            ]
+
+        async def get_report(year, quarter):
+            return await self.__get_JSON(
+                self._endpoint("seminary-report", unit=unit)
+                + f"&year={year}&quarter={quarter}"
+            )
+
+        return {
+            year: {quarter: await get_report(year, quarter)}
+            for year, quarter in await get_quarters()
+        }
+
+    async def get_unit_organizations(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit calling/leadership organization structure
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_unit_organizations-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("unit-organizations", unit=unit))
+
+    async def get_suborganization(self, org_id: int = None, unit: int = None) -> JSONType:
+        """
+        Returns information for a given suborganization of a unit
+
+        Parameters
+        org_id : int
+            Number of the suborganization of the unit for which to retrieve the report. Defaults
+            to the class assignment for gendered class (Elders' Quorum, Relief Society, etc.).
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_suborganization-schema.md
+        """
+        if org_id is None and self._org_id is None:
+            # Set SUNDAY_GENDER class org id
+            self._org_id = next(
+                assignment
+                for assignment in await self.get_member_callings_and_classes()["classAssignments"]
+                if assignment["group"] == "SUNDAY_GENDER"
+            )["classId"]
+
+        return await self.__get_JSON(
+            self._endpoint("suborganization", org_id=org_id, unit=unit)
+        )[0]
+
+    async def get_full_time_missionaries(self, unit: int = None) -> JSONType:
+        """
+        Returns a list of the members from the unit currently serving missions
+
+        Parameters
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_full_time_missionaries-schema.md
+        """
+        return await self.__get_JSON(self._endpoint("full-time-missionaries", unit=unit))
+
+    async def get_assigned_missionaries(self, unit: int = None) -> JSONType:
+        """
+        Returns a list of the missionaries currently assigned to serve in the unit
+
+        Parameters
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_assigned_missionaries-schema.md
+        """
+        return await self.__get_JSON(self._endpoint("assigned-missionaries", unit=unit))
+
+    async def get_unit_statistics(self, unit: int = None) -> JSONType:
+        """
+        Returns the unit statistics
+
+        Parameters
+
+        unit : int
+            Number of the church unit for which to retrieve the report
+
+        Returns
+
+        .. literalinclude:: ../JSON_schemas/get_unit_statistics-schema.md
+        """
+
+        return await self.__get_JSON(self._endpoint("statistics", unit=unit))
