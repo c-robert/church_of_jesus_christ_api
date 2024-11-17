@@ -210,8 +210,6 @@
       gender: str,
       genderCode: int,
       genderLabelShort: str,
-      householdEmail: NoneType,
-      householdPhone: str,
       htvtAssignments: NoneType,
       htvtCompanions: NoneType,
       id: int,

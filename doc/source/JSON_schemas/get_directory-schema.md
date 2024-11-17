@@ -2,43 +2,46 @@
   {
     address: str,
     coordinates: {
-      lat: float,
-      long: float
+      latitude: float,
+      longitude: float
     },
-    displayName: str,
-    email: str,
-    familyName: str,
+    editable: bool,
     members: [
       {
+        countryId: int,
         displayName: str,
-        email: str,
-        familyName: str,
+        editable: bool,
+        email: {
+          email: str
+        },
         givenName: str,
         head: bool,
         householdUuid: str,
-        individualId: int,
-        permissions: [
-          str
-        ],
-        phone: str,
-        positions: [
-          {
-            name: str,
-            setApart: bool,
-            type: str,
-            unitName: str,
-            unitNumber: int,
-            uuid: str
-          }
-        ],
-        preferredName: str,
+        name: str,
+        phone: {
+          country: int,
+          e164: str,
+          number: str
+        },
+        privacy: {
+          birthDate: str,
+          email: str,
+          phone: str,
+          photo: str
+        },
+        surname: str,
+        unitNumber: int,
         uuid: str
       }
     ],
-    permissions: [
-      str
-    ],
-    phone: str,
+    movable: bool,
+    name: str,
+    privacy: {
+      address: str,
+      coordinates: str,
+      photo: str
+    },
+    surname: str,
     unitNumber: int,
     uuid: str,
     verified: bool

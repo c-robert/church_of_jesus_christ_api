@@ -3,24 +3,41 @@
     {
       companionships: [
         {
+          assignmentErrors: list,
+          assignmentWarnings: list,
           assignments: [
             {
+              age: int,
+              assignType: str,
               legacyCmisId: int,
               name: str,
-              nameOrder: int,
+              nameSort: str,
               personUuid: str,
               youthBasedOnAge: bool
             }
           ],
           id: str,
+          ministerErrors: list,
+          ministerWarnings: list,
           ministers: [
             {
+              age: int,
               assignType: str,
               email: str,
+              interviews: [
+                {
+                  date: str,
+                  id: str,
+                  month: int,
+                  timestamp: str,
+                  year: int
+                }
+              ],
               legacyCmisId: int,
               name: str,
-              nameOrder: int,
+              nameSort: str,
               personUuid: str,
+              priesthoodOffice: str,
               unitOrgId: str,
               youthBasedOnAge: bool
             }
@@ -38,9 +55,7 @@
   ],
   eldersQuorumSupervisors: [
     {
-      legacyCmisId: int,
       name: str,
-      nameOrder: int,
       personUuid: str,
       youthBasedOnAge: bool
     }
@@ -51,30 +66,39 @@
     {
       companionships: [
         {
+          assignmentErrors: list,
+          assignmentWarnings: list,
           assignments: [
             {
+              age: int,
+              assignType: str,
               legacyCmisId: int,
               name: str,
-              nameOrder: int,
+              nameSort: str,
               personUuid: str,
               youthBasedOnAge: bool
             }
           ],
           id: str,
+          ministerErrors: list,
+          ministerWarnings: list,
           ministers: [
             {
+              age: int,
               assignType: str,
               email: str,
               interviews: [
                 {
                   date: str,
                   id: str,
-                  timestamp: str
+                  month: int,
+                  timestamp: str,
+                  year: int
                 }
               ],
               legacyCmisId: int,
               name: str,
-              nameOrder: int,
+              nameSort: str,
               personUuid: str,
               unitOrgId: str,
               youthBasedOnAge: bool
@@ -93,36 +117,22 @@
   ],
   reliefSocietySupervisors: [
     {
-      legacyCmisId: int,
       name: str,
-      nameOrder: int,
       personUuid: str,
       youthBasedOnAge: bool
     }
   ],
   unitOrgs: [
     {
-      children: [
-        {
-          children: NoneType,
-          isClass: bool,
-          unitNumber: int,
-          unitOrgName: str,
-          unitOrgTypeIds: [
-            int
-          ],
-          unitOrgUuid: str,
-          unitUuid: str
-        }
-      ],
+      children: NoneType,
       isClass: bool,
-      unitNumber: int,
+      unitNumber: NoneType,
       unitOrgName: str,
       unitOrgTypeIds: [
         int
       ],
       unitOrgUuid: str,
-      unitUuid: str
+      unitUuid: NoneType
     }
   ]
 }

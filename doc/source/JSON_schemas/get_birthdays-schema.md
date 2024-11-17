@@ -20,8 +20,6 @@
         gender: str,
         genderCode: int,
         genderLabelShort: str,
-        householdEmail: NoneType,
-        householdPhone: str,
         id: int,
         monthInteger: int,
         mrn: NoneType,

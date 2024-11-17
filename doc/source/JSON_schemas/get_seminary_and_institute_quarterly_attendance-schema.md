@@ -297,7 +297,40 @@
     }
   },
   2023: {
-    2: {
+    4: {
+      isStakeTotals: bool,
+      quarter: int,
+      sections: [
+        {
+          comment: str,
+          id: int,
+          name: str,
+          rows: [
+            {
+              actual: int,
+              id: int,
+              name: str,
+              percent: int,
+              potential: int,
+              tooltip: str,
+              value: NoneType,
+              valueIsActual: bool,
+              valueIsPercent: bool,
+              valueIsPotential: bool
+            }
+          ],
+          subSections: list
+        }
+      ],
+      unitAbbreviation: NoneType,
+      unitName: str,
+      unitNumber: int,
+      year: int,
+      yearQuarterDisplay: str
+    }
+  },
+  2024: {
+    3: {
       isStakeTotals: bool,
       quarter: int,
       sections: [
